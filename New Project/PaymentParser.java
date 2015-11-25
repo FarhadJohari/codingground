@@ -49,7 +49,7 @@ public class PaymentParser{
      }
      
      /**
-      * 
+      * A method for parsing payment services, which envokes the payment receiver.
       * @param the BufferedReader is used to get the lines from the file.
       */
      private void parsePaymentService(BufferedReader br){
@@ -59,11 +59,12 @@ public class PaymentParser{
         }
         String accNum = line.substring(1,16);
         accNum = accNum.replaceAll("\\s+","");
-        String[] strsum = (line.substring(16,30).trim()).split(",");
+        String strsum = line.substring(16,30).trim();
         int numPosts, year, month, date;
-        Double accumsum;
+        BigDecimal accumsum;
         try{
-            accumsum = Double.parseDouble(strsum[0]) + Double.parseDouble(strsum[1])*Math.pow(10,(-1*strsum[1].length()));
+            accumsum = convertStringToBigDecimal(strsum);
+            
             numPosts = Integer.parseInt(line.substring(30,40));
             year = Integer.parseInt(line.substring(40,44));
             month = Integer.parseInt(line.substring(44,46));
@@ -76,38 +77,32 @@ public class PaymentParser{
         line = br.readLine();
         String ref;
         String[] paymentString;
-        Double calcTemp, calcSum;
-        calcSum = 0;
-        BigDecimal depValue;
+
+        BigDecimal depValue, calcSum = new BigDecimal("0");
         ArrayList<String> references = new ArrayList<String>();
         ArrayList<BigDecimal> paymentlist = new ArrayList<BigDecimal>();
         while(line.substring(0,1).equals("B")){
             ref = line.substring(15,50).trim();
             references.add(ref);
             
-            paymentString = (line.substring(1,15).trim()).split(",");
+            paymentString = line.substring(1,15).trim();
             try{
-                calcTemp = Double.parseDouble(paymentString[0]) + Double.parseDouble(paymentString[1])*Math.pow(10,(-1*paymentString[1].length()));
+                depValue = convertStringToBigDecimal(paymentString);
             }
             catch(NumberFormatException e){
                 throwMessageAndExit("Unable to convert information in the ending post. Exiting program.");
             }
-            calcSum = calcSum + calcTemp;
-            depValue = new BigDecimal(calcTemp.toString());
+            calcSum = calcSum.add(depValue);
             paymentlist.add(depValue);
         }
-        if(calcSum!=accumsum || references.size()!=numPosts){
+        if(calcSum.compareTo(accumsum) != 0 || references.size()!=numPosts){
             throwMessageAndExit("Exiting program due to inconsistencies in the ending post.");
         }
-        PaymentReceiver pr = new PaymentReceiver;
-        pr.startPaymentBundle(accNum,d,currency);
-        for(int i=0;i<paymentlist.size();i++){
-            pr.payment(paymentlist.get(i),references.get(i));
-        }
+        envokePayment(accNum,d,currency,references,paymentlist);
      }
      
      /**
-      * 
+      * A method for parsing deposites and envoking the payment receiver.
       * @param the BufferedReader is used to get the lines from the file.
       */
      private void parseDepositService(BufferedReader br){
@@ -121,41 +116,53 @@ public class PaymentParser{
         ArrayList<BigDecimal> deposits = new ArrayList<BigDecimal>();
         ArrayList<String> references = new ArrayList<String>();
         String ref, depString;
-        Double depDouble, accumsum;
+        BigDecimal depDecimal, accumsum = new BigDecimal();
         BigDecimal depValue;
-        
+        BigDecimal divider = new BigDecimal("100");
         while(line.substring(0,2).equals("30")){
             ref = line.substring(40,65).trim();
             references.add(ref);
             
             depString = line.substring(2,22);
             try{
-                depDouble = Double.parseDouble(depString)*0.01;
+                depDecimal = convertStringToBigDecimal(depString).divide(divider);
             }
             catch(NumberFormatException e){
                 throwMessageAndExit("Unable to convert payment. Exiting program.");
             }
-            accumsum = accumsum + depDouble;
-            depValue = new BigDecimal(depDouble.toString());
-            deposits.add(depValue);
+            accumsum = accumsum.add(depDecimal);
+            deposits.add(depDecimal);
             line = br.readLine();
         }
         if(!line.substring(0,2).equals("99")){
             throwMessageAndExit("Missing ending post. Exiting program.");
         }
         try{
-            Double postAccumsum = Double.parseDouble(line.substring(2,22));
+            BigDecimal postAccumsum = new BigDecimal(line.substring(2,22));
+            postAccumsum = postAccumsum.divide(divider);
             int numPosts = Integer.parseInt(line.substring(30,38));
         }catch(NumberFormatException e){
                 throwMessageAndExit("Unable to convert information in the ending post. Exiting program.");
         }
-        if(numPosts!=deposits.size() || postAccumsum!=accumsum){
+        if(numPosts!=deposits.size() || postAccumsum.compareTo(accumsum)!=0){
             throwMessageAndExit("Exiting program due to inconsistencies in the ending post.");
         }
+        envokePayment(accNum, new Date(), "SEK", references, deposits);
+     }
+     
+     /**
+      * This method is used to envoke all the payments through the payment receiver.
+      * @param account is the accountnumber related to the payments.
+      * @param theDate is the date of the transactions.
+      * @param currency holds the currency of the transactions.
+      * @param references consists of a list containing all the references related to the transactions.
+      * @param valueList consists of a list containing all the values of the transactions.
+      */
+     private void envokePayment(String account, Date theDate, String currency, ArrayList references, ArrayList valueList){
         PaymentReceiver pr = new PaymentReceiver;
-        pr.startPaymentBundle(accNum,new Date(),"SEK");
-        for(int i=0;i<deposits.size();i++){
-            pr.payment(deposits.get(i),references.get(i));
+        pr.startPaymentBundle(account,theDate,currency);
+        for(int i=0;i<valueList.size();i++){
+            pr.payment(valueList.get(i),references.get(i));
         }
         pr.endPaymentBundle();
      }
@@ -164,7 +171,7 @@ public class PaymentParser{
       * The method both identifies the file type as well as the encoding
       * used for the specific file type. If the file type is unknown
       * the method throwMessageAndExit is called.
-      * @param the filepath is used to identify the type of the file.
+      * @param filepath is used to identify the type of the file.
       */
      private void identifyFileType(String filePath){
         String[] str = filePath.split("_");
@@ -203,11 +210,27 @@ public class PaymentParser{
      /**
       * Called when an error occurs. A error message is printed before
       * the streams and the program is shut down.
-      * @param Error message which is printed.
+      * @param exitMessage Error message which is printed.
       */
      private void throwMessageAndExit(String exitMessage){
         System.err.println(exitMessage);
         closeStreams();
         System.exit(1);
+     }
+     
+     /**
+      * 
+      * @param amount converted from a string to a BigDecimal
+      */
+     private BigDecimal convertStringToBigDecimal(String amount){
+        DecimalFormatSymbols symbols = new DecimalFormatSymbols();
+        symbols.setDecimalSeparator(',');
+
+        DecimalFormat decimalFormat = new DecimalFormat("#0,0#", symbols);
+        decimalFormat.setParseBigDecimal(true);
+            
+        // parse the string
+        BigDecimal bd = (BigDecimal) decimalFormat.parse(amount);
+        return bd;
      }
 }
